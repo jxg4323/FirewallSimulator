@@ -1,0 +1,65 @@
+# valgrind.suppressions for Firewall project
+# When the user quits the firewall, the processing thread
+# has to stop what it is doing and close the pipes.
+# After learning about the quit request, the 
+# thread destroy function does the cleanup, but
+# the library pipe code leaves pointers into the memory, and
+# that causes valgrind to complain even though the memory
+# is or has been freed.
+
+{
+   suppress> pthread_cancel reachable leak 1: malloc-strdup
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   fun:strdup
+   ...
+   fun:pthread_cancel_init
+   fun:pthread_cancel
+}
+
+{
+   suppress> pthread_cancel reachable leak 2: calloc-dl_new_object
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:calloc
+   fun:_dl_new_object
+   ...
+   fun:pthread_cancel
+}
+
+{
+   suppress> pthread_cancel reachable leak 3: malloc-dl_new_object
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   fun:_dl_new_object
+   ...
+   fun:_dl_catch_error
+   ...
+   fun:pthread_cancel
+}
+
+{
+   suppress> pthread_cancel reachable leak 4: calloc-dl_check_map...
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:calloc
+   fun:_dl_check_map_versions
+   ...
+   fun:_dl_catch_error
+   fun:dlerror_run
+   fun:__libc_dlopen_mode
+   fun:pthread_cancel_init
+   fun:pthread_cancel
+}
+
+{
+   suppress> deallocate tsd
+   Memcheck:Free
+   fun:free
+   fun:__nptl_deallocate_tsd.part.4
+   fun:__nptl_deallocate_tsd
+   fun:start_thread
+}
+
