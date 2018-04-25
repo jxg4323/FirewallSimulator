@@ -208,10 +208,10 @@ IpPktFilter create_filter(void){
 /// @param filter The filter that is to be destroyed
 void destroy_filter(IpPktFilter filter){
 	FilterConfig* fltCfg = filter;
-	
+
 	free( fltCfg->blockedInboundTcpPorts );
 	free( fltCfg->blockedIpAddresses );
-	free( filter );
+	free( fltCfg );
 }
 
 
@@ -298,7 +298,8 @@ bool configure_filter(IpPktFilter filter, char* filename){
 			
 		}
 	}
-	//free( buf );
+	
+	free( buf );
 	fclose( pFile );
     if(validConfig == false){
         fprintf(stderr, "Error, configuration file must set LOCAL_NET\n");

@@ -35,6 +35,12 @@
 
 #include "filter.h"
 
+// integer base
+#define BASE 10
+
+// maximum command line buffer size
+#define MAX_BUF_SIZE 256
+
 /// maximum packet length (ipv4)
 #define MAX_PKT_LENGTH 2048
 
@@ -110,7 +116,7 @@ void tsd_destroy( void * tsd_data) {
    printf( "fw: thread destructor is deleting filter data.\n"); fflush( stdout);
    if ( fw_spec->filter ) 
    {
-      destroy_filter( fw_spec->filter);
+      destroy_filter( fw_spec->filter );
       fw_spec->filter = NULL; 
    }
    printf( "fw: thread destructor is closing pipes.\n"); fflush( stdout);
@@ -195,6 +201,7 @@ static void * filter_thread(void* args){
     unsigned char pktBuf[MAX_PKT_LENGTH];
     bool success = false; // assume packet blocked
     int length = 0;
+	int numItems = 0;
 
     static int status = EXIT_FAILURE; // static for return persistence
 
@@ -205,58 +212,47 @@ static void * filter_thread(void* args){
 	fprintf(stdout,"fw: starting filter thread.\n");
 	fflush(stdout);
 
-	FILE* temp = fopen("testing","w");
-	int testing = 0;
+	pthread_setcancelstate(PTHREAD_CANCEL_ENABLE,&numItems);
+	//pthread_setspecific( tsd_key, spec_p );
 
 	spec_p = (FWSpec_T*)args;
 	// make sure pipes open successfully
 	if( open_pipes(spec_p) ){
-		
-		int c = 1;
+		// continously read ToFirewall pipe until blocked
 		while( 1 ){
-			testing = fread(&length,sizeof(unsigned int),1,spec_p->pipes.in_pipe);
-			fprintf(temp,"Mode =  %d\n",MODE);
-			//printf("fw: Starting packet %d of %d from: %s\n",c,length,spec_p->in_file);
+			// read size of packet to be read
+			numItems = fread(&length,sizeof(unsigned int),1,spec_p->pipes.in_pipe);
+			// read packet data
 			length = read_packet( spec_p->pipes.in_pipe,pktBuf,length );
-					
-			if( MODE == MODE_FILTER ){
-				success = filter_packet( spec_p->filter,pktBuf ),fprintf(temp,"filtered %d\n",success);
+			// check modes 
+			if( MODE == MODE_FILTER ){ // check if packet is to be blocked based on config file
+				success = filter_packet( spec_p->filter,pktBuf );
 				if( success ){// write the packet to the FromFirewall pipe
-				
-					testing = fwrite( &length,sizeof(unsigned int),1,spec_p->pipes.out_pipe );		
-					testing = fwrite( pktBuf,sizeof(unsigned char),length,spec_p->pipes.out_pipe );
+					
+					numItems = fwrite( &length,sizeof(unsigned int),1,spec_p->pipes.out_pipe );		
+					numItems = fwrite( pktBuf,sizeof(unsigned char),length,spec_p->pipes.out_pipe );
 					fflush( spec_p->pipes.out_pipe );
 					status = EXIT_SUCCESS;		
 
 				}
 			}else if( MODE == MODE_ALLOW_ALL ){
-			
-				testing = fwrite( &length,sizeof(unsigned int),1,spec_p->pipes.out_pipe );
-				testing = fwrite( pktBuf,1,length,spec_p->pipes.out_pipe );
+				// write packet data to the FromFirewall pipe
+				numItems = fwrite( &length,sizeof(unsigned int),1,spec_p->pipes.out_pipe );
+				numItems = fwrite( pktBuf,1,length,spec_p->pipes.out_pipe );
 				fflush( spec_p->pipes.out_pipe );
 				status = EXIT_SUCCESS;		
 
-			}else if( MODE == MODE_BLOCK_ALL ){
-				char * crap = "blocked all filter thread";
-				testing = fwrite( crap,sizeof(char),strlen(crap),temp );
-				fflush( spec_p->pipes.out_pipe );
+			}else if( MODE == MODE_BLOCK_ALL ){ // don't write anything to FromFirewall pipe
 				status = EXIT_SUCCESS;
 
 			}
-			//fprintf(temp,"fw: length %d , c %d\n",length,c);
-			fflush( temp );
-			// increment number of packets
-			c++;								
 		}
 
 	}
 
-	fclose( temp );
-
-	pthread_setspecific( tsd_key, spec_p );
     // end of thread is never reached when there is a cancellation.
     printf( "fw: thread is deleting filter data.\n"); fflush( stdout);
-    tsd_destroy( (void *)spec_p);
+    tsd_destroy( (void *)spec_p );
     printf("fw: thread returning. status: %d\n", status);
     fflush( stdout);
 
@@ -283,10 +279,11 @@ static void display_menu(void)
 /// @param argv Command line arguments; name of the configuration file
 /// @return EXIT_SUCCESS or EXIT_FAILURE
 int main(int argc, char* argv[]){
+	int op;
     int command = 5; // unknown command
-	char string[256];
-    bool done = false;
-	pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+	char* string = (char *)malloc(sizeof(char)*MAX_BUF_SIZE);
+	bool done = false; // user command thread loop condition
+	pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; 
 
     // print usage message if no arguments
     if(argc < 2){
@@ -295,6 +292,15 @@ int main(int argc, char* argv[]){
     }
 
     init_sig_handlers();
+
+	while( (op = getopt( argc,argv, "ci")) != -1){
+		switch(op){
+			case 'c': // ip header checksum
+				break;
+			case 'l': // write block packets to a pcap-formatted file
+				break;
+		}
+	}
 
 	fw_spec.filter = create_filter();
 	fw_spec.in_file = "ToFirewall";	
@@ -310,66 +316,61 @@ int main(int argc, char* argv[]){
 	// key create destructor routine for tid_filter thread
 	pthread_key_create( &tsd_key,&tsd_destroy );
 
-	FILE* tem = fopen("testing2","w");
-	
-	fprintf(tem,"Initial Mode setting: %d\n",MODE);
-	fflush( tem );
-
 	// spawn filter thread
 	pthread_create(&tid_filter,NULL,&filter_thread,&fw_spec);
 	
 	// user command thread
 	display_menu();
-	
-	
-	while( fgets(string,256,stdin) != NULL ){
-		command = (int)strtol(string,NULL,(int)command);
+
+	// while the simulator program doesn't send an exit command wait for a command	
+	while( !done ){
+		// get command string
+		string = fgets(string,MAX_BUF_SIZE,stdin);
+		command = (int)strtol(string,NULL,BASE);
 		switch(command){
 			case 0: // exit
-			
+				
 				// set cancelled to true
 				pthread_mutex_lock( &mutex );
         		NOT_CANCELLED = 0;
 				pthread_mutex_unlock( &mutex ); 
-
-				// exit filter thread 
-				sig_handler( SIGHUP );
-				// exit main thread
-				pthread_exit( EXIT_SUCCESS );
-								
+				// tell simulator I'm cancelling the filter thread	
+				printf(">\nExiting Firewall\n");
+				fflush( stdout );
+				done = true;
+				pthread_cancel(tid_filter);		
+					
 				break;
 			case 1: // block all packets
 
-				
-				fprintf(tem,"Saw block all call\n");
-				fflush( tem );
-
+				// set mode
 				pthread_mutex_lock( &mutex );
 				MODE = MODE_BLOCK_ALL;
 				pthread_mutex_unlock( &mutex ); 
-				
+				// inform the simulator that the filter thread is blocking all
 				printf("blocking all\n");
 				fflush( stdout );	
 			
-				fprintf(tem,"Mode = %d\n",MODE);
-				fflush(tem);
-
 				break;
 			case 2: // allow all packets
 				
+				//set mode
 				pthread_mutex_lock( &mutex );
 				MODE = MODE_ALLOW_ALL;
 				pthread_mutex_unlock( &mutex ); 
-
+				// inform the simulator that the filter thread is allowing all
 				printf("allowing all\n");
 				fflush( stdout );	
+	
 				break;
 			case 3: // filter packets base on config file
-
+				
+				// set mode
 				pthread_mutex_lock( &mutex );
 				MODE = MODE_FILTER;
 				pthread_mutex_unlock( &mutex ); 
-		
+				// inform the simulator that the filter thread is using
+				// the FilterConfig structure to filter packet data
 				printf("filtering\n");
 				fflush( stdout );	
 				break;
@@ -380,12 +381,9 @@ int main(int argc, char* argv[]){
 		}	
 	}	
 		
-	pthread_setspecific( tsd_key, &fw_spec );
-
-    //TODO: student implements main()
-
-
+	
     printf( "fw: main is joining the thread.\n"); fflush( stdout);
+	tsd_destroy( &fw_spec ); // free the firewall structure				
 
     // wait for the filter thread to terminate
     void * retval = NULL;
