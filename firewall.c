@@ -1,3 +1,10 @@
+/*
+ * Author: James Green
+ * Date: 4/25/2018
+ * Assignment: firewall
+ * Professor: Adam Purtee
+ */
+
 /// \file firewall.c
 /// \brief Reads IP packets from a named pipe, examines each packet,
 /// and writes allowed packets to an output named pipe.
@@ -24,6 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>     /* read library call comes from here */
+#include <string.h>
 
 #include "filter.h"
 
@@ -112,50 +120,51 @@ void tsd_destroy( void * tsd_data) {
 /// signal handler passes signal information to the subordinate thread so
 /// that the thread can gracefully terminate and clean up.
 /// @param signum signal that was received by the main thread.
-static void sig_handler( int signum)
-{
+static void sig_handler( int signum ){
+	
     if(signum == SIGHUP) {
         NOT_CANCELLED = 0;
         printf("\nfw: received Hangup request. Cancelling...\n");
         fflush( stdout);
         pthread_cancel(tid_filter);  // cancel on signal to hangup
     }
+	
 }
 
 /// init_sig_handlers initializes sigaction and installs signal handlers.
 static void init_sig_handlers() {
 
-    struct sigaction signal_action;            // define sig handler table 
+     struct sigaction signal_action;            // define sig handler table 
 
-    signal_action.sa_flags = 0;               // linux lacks SA_RESTART 
-    sigemptyset( &signal_action.sa_mask );    // no masked interrupts 
-    signal_action.sa_handler = sig_handler;   // insert handler function
+     signal_action.sa_flags = 0;               // linux lacks SA_RESTART 
+     sigemptyset( &signal_action.sa_mask );    // no masked interrupts 
+     signal_action.sa_handler = sig_handler;   // insert handler function
 
-    sigaction( SIGHUP, &signal_action, NULL ); // for HangUP from fwSim
-    return; 
+     sigaction( SIGHUP, &signal_action, NULL ); // for HangUP from fwSim
+     return; 
 } // init_sig_handlers 
 
 
 /// Open the input and output streams used for reading and writing packets.
 /// @param spec_ptr structure contains input and output stream names.
 /// @return true if successful
-static bool open_pipes( FWSpec_T * spec_ptr)
-{
-   spec_ptr->pipes.in_pipe = fopen( spec_ptr->in_file, "rb");
-   if(spec_ptr->pipes.in_pipe == NULL)
-   {
-      printf( "fw: ERROR: failed to open pipe %s.\n", spec_ptr->in_file);
-      return false;
-   }
+static bool open_pipes( FWSpec_T * spec_ptr){
 
-   spec_ptr->pipes.out_pipe = fopen( spec_ptr->out_file, "wb");
-   if(spec_ptr->pipes.out_pipe == NULL)
-   {
-      printf( "fw: ERROR: failed to open pipe %s.\n", spec_ptr->out_file);
-      return false;
-   }
+    spec_ptr->pipes.in_pipe = fopen( spec_ptr->in_file, "rb");
+    if(spec_ptr->pipes.in_pipe == NULL)
+    {
+       printf( "fw: ERROR: failed to open pipe %s.\n", spec_ptr->in_file);
+       return false;
+    }
 
-   return true;
+    spec_ptr->pipes.out_pipe = fopen( spec_ptr->out_file, "wb");
+    if(spec_ptr->pipes.out_pipe == NULL)
+    {
+       printf( "fw: ERROR: failed to open pipe %s.\n", spec_ptr->out_file);
+       return false;
+    }
+
+    return true;
 }
 
 /// Read an entire IP packet from the input pipe
@@ -163,16 +172,14 @@ static bool open_pipes( FWSpec_T * spec_ptr)
 /// @param buf Destination buffer for storing the packet
 /// @param buflen The length of the supplied destination buffer
 /// @return length of the packet or -1 for error
-static int read_packet(FILE * in_pipe, unsigned char* buf, int buflen )
-{
-   int numRead = 0;
-   int numBytes = -1;
+static int read_packet(FILE * in_pipe, unsigned char* buf, int buflen ){
+    int numBytes = -1;
+    int len_read = -1; // assume error
+	numBytes = buflen;
+	
+	len_read = fread(buf,sizeof(unsigned char),numBytes,in_pipe);
 
-   int len_read = -1; // assume error
-
-   //TODO: student implements filter_thread()
-
-   return len_read;
+    return len_read;
 }
 
 
@@ -184,28 +191,76 @@ static int read_packet(FILE * in_pipe, unsigned char* buf, int buflen )
 /// @param args pointer to an FWSpec_T structure
 /// @return pointer to static exit status value which is 0 on success
 
-static void * filter_thread(void* args)
-{
-   unsigned char pktBuf[MAX_PKT_LENGTH];
-   bool success;
-   int length;
+static void * filter_thread(void* args){
+    unsigned char pktBuf[MAX_PKT_LENGTH];
+    bool success = false; // assume packet blocked
+    int length = 0;
 
-   static int status = EXIT_FAILURE; // static for return persistence
+    static int status = EXIT_FAILURE; // static for return persistence
 
-   status = EXIT_FAILURE; // reset
+    status = EXIT_FAILURE; // reset
+ 
+    FWSpec_T * spec_p = NULL;
 
-   FWSpec_T * spec_p = NULL;
+	fprintf(stdout,"fw: starting filter thread.\n");
+	fflush(stdout);
 
-   //TODO: student implements filter_thread()
+	FILE* temp = fopen("testing","w");
+	int testing = 0;
 
+	spec_p = (FWSpec_T*)args;
+	// make sure pipes open successfully
+	if( open_pipes(spec_p) ){
+		
+		int c = 1;
+		while( 1 ){
+			testing = fread(&length,sizeof(unsigned int),1,spec_p->pipes.in_pipe);
+			fprintf(temp,"Mode =  %d\n",MODE);
+			//printf("fw: Starting packet %d of %d from: %s\n",c,length,spec_p->in_file);
+			length = read_packet( spec_p->pipes.in_pipe,pktBuf,length );
+					
+			if( MODE == MODE_FILTER ){
+				success = filter_packet( spec_p->filter,pktBuf ),fprintf(temp,"filtered %d\n",success);
+				if( success ){// write the packet to the FromFirewall pipe
+				
+					testing = fwrite( &length,sizeof(unsigned int),1,spec_p->pipes.out_pipe );		
+					testing = fwrite( pktBuf,sizeof(unsigned char),length,spec_p->pipes.out_pipe );
+					fflush( spec_p->pipes.out_pipe );
+					status = EXIT_SUCCESS;		
 
-   // end of thread is never reached when there is a cancellation.
-   printf( "fw: thread is deleting filter data.\n"); fflush( stdout);
-   tsd_destroy( (void *)spec_p);
-   printf("fw: thread returning. status: %d\n", status);
-   fflush( stdout);
+				}
+			}else if( MODE == MODE_ALLOW_ALL ){
+			
+				testing = fwrite( &length,sizeof(unsigned int),1,spec_p->pipes.out_pipe );
+				testing = fwrite( pktBuf,1,length,spec_p->pipes.out_pipe );
+				fflush( spec_p->pipes.out_pipe );
+				status = EXIT_SUCCESS;		
 
-   pthread_exit( &status);
+			}else if( MODE == MODE_BLOCK_ALL ){
+				char * crap = "blocked all filter thread";
+				testing = fwrite( crap,sizeof(char),strlen(crap),temp );
+				fflush( spec_p->pipes.out_pipe );
+				status = EXIT_SUCCESS;
+
+			}
+			//fprintf(temp,"fw: length %d , c %d\n",length,c);
+			fflush( temp );
+			// increment number of packets
+			c++;								
+		}
+
+	}
+
+	fclose( temp );
+
+	pthread_setspecific( tsd_key, spec_p );
+    // end of thread is never reached when there is a cancellation.
+    printf( "fw: thread is deleting filter data.\n"); fflush( stdout);
+    tsd_destroy( (void *)spec_p);
+    printf("fw: thread returning. status: %d\n", status);
+    fflush( stdout);
+
+    pthread_exit( &status);
 }
 
 
@@ -227,39 +282,123 @@ static void display_menu(void)
 /// @param argc Number of command line arguments; 1 expected
 /// @param argv Command line arguments; name of the configuration file
 /// @return EXIT_SUCCESS or EXIT_FAILURE
-int main(int argc, char* argv[])
-{
-   int command;
-   bool done = false;
+int main(int argc, char* argv[]){
+    int command = 5; // unknown command
+	char string[256];
+    bool done = false;
+	pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
-   // print usage message if no arguments
-   if(argc < 2)
-   {
-      fprintf(stderr, "usage: %s configFileName\n", argv[0]);
-      return EXIT_FAILURE;
-   }
+    // print usage message if no arguments
+    if(argc < 2){
+       fprintf(stderr, "usage: %s configFileName\n", argv[0]);
+       return EXIT_FAILURE;
+    }
 
-   init_sig_handlers();
+    init_sig_handlers();
 
-   //TODO: student implements main()
+	fw_spec.filter = create_filter();
+	fw_spec.in_file = "ToFirewall";	
+	fw_spec.out_file = "FromFirewall";
+
+	fw_spec.config_file = argv[1];
+	// configure filter
+	if( !configure_filter(fw_spec.filter,fw_spec.config_file) ){
+		fprintf(stderr,"configure_filter failed\n");
+		return EXIT_FAILURE;
+	}	
+
+	// key create destructor routine for tid_filter thread
+	pthread_key_create( &tsd_key,&tsd_destroy );
+
+	FILE* tem = fopen("testing2","w");
+	
+	fprintf(tem,"Initial Mode setting: %d\n",MODE);
+	fflush( tem );
+
+	// spawn filter thread
+	pthread_create(&tid_filter,NULL,&filter_thread,&fw_spec);
+	
+	// user command thread
+	display_menu();
+	
+	
+	while( fgets(string,256,stdin) != NULL ){
+		command = (int)strtol(string,NULL,(int)command);
+		switch(command){
+			case 0: // exit
+			
+				// set cancelled to true
+				pthread_mutex_lock( &mutex );
+        		NOT_CANCELLED = 0;
+				pthread_mutex_unlock( &mutex ); 
+
+				// exit filter thread 
+				sig_handler( SIGHUP );
+				// exit main thread
+				pthread_exit( EXIT_SUCCESS );
+								
+				break;
+			case 1: // block all packets
+
+				
+				fprintf(tem,"Saw block all call\n");
+				fflush( tem );
+
+				pthread_mutex_lock( &mutex );
+				MODE = MODE_BLOCK_ALL;
+				pthread_mutex_unlock( &mutex ); 
+				
+				printf("blocking all\n");
+				fflush( stdout );	
+			
+				fprintf(tem,"Mode = %d\n",MODE);
+				fflush(tem);
+
+				break;
+			case 2: // allow all packets
+				
+				pthread_mutex_lock( &mutex );
+				MODE = MODE_ALLOW_ALL;
+				pthread_mutex_unlock( &mutex ); 
+
+				printf("allowing all\n");
+				fflush( stdout );	
+				break;
+			case 3: // filter packets base on config file
+
+				pthread_mutex_lock( &mutex );
+				MODE = MODE_FILTER;
+				pthread_mutex_unlock( &mutex ); 
+		
+				printf("filtering\n");
+				fflush( stdout );	
+				break;
+			default: //unkown command
+				fprintf(stdout,"Entered unkown command\n");
+				fflush( stdout );
+				break;
+		}	
+	}	
+		
+	pthread_setspecific( tsd_key, &fw_spec );
+
+    //TODO: student implements main()
 
 
-   printf( "fw: main is joining the thread.\n"); fflush( stdout);
+    printf( "fw: main is joining the thread.\n"); fflush( stdout);
 
-   // wait for the filter thread to terminate
-   void * retval = NULL;
-   int joinResult = pthread_join(tid_filter, &retval);
-   if( joinResult != 0)
-   {
-      printf( "fw: main Error: unexpected joinResult: %d\n", joinResult);
-      fflush( stdout);
-   }
-   if ( (void*)retval == PTHREAD_CANCELED )
-   {
-      printf( "fw: main confirmed that the thread was canceled.\n");
-   }
+    // wait for the filter thread to terminate
+    void * retval = NULL;
+    int joinResult = pthread_join(tid_filter, &retval);
+    if( joinResult != 0){
+       printf( "fw: main Error: unexpected joinResult: %d\n", joinResult);
+       fflush( stdout);
+    }
+    if ( (void*)retval == PTHREAD_CANCELED ){
+       printf( "fw: main confirmed that the thread was canceled.\n");
+    }
 
-   printf( "fw: main returning.\n"); fflush( stdout);
-   return EXIT_SUCCESS;
+    printf( "fw: main returning.\n"); fflush( stdout);
+    return EXIT_SUCCESS;
 }
 
