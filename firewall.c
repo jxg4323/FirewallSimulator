@@ -327,6 +327,7 @@ int main(int argc, char* argv[]){
 	fw_spec.filter = create_filter();
 	fw_spec.in_file = "ToFirewall";	
 	fw_spec.out_file = "FromFirewall";
+	fw_spec.cflag = false;
 
 	while( (op = getopt( argc,argv, "cl")) != -1){
 		switch(op){
