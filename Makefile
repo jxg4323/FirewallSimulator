@@ -1,5 +1,5 @@
 #
-# Created by gmakemake (Ubuntu Jul 25 2014) on Fri Apr 20 10:57:53 2018
+# Created by gmakemake (Ubuntu Jul 25 2014) on Thu Apr 26 12:59:18 2018
 #
 
 #
@@ -76,7 +76,7 @@ OBJFILES =	filter.o
 all:	firewall 
 
 firewall:	firewall.o $(OBJFILES)
-	$(CC) $(CFLAGS) -o firewall firewall.o $(OBJFILES) $(CLIBFLAGS)
+	$(CC) $(CFLAGS) -o firewall firewall.o $(OBJFILES) $(CLIBFLAGS) 
 
 #
 # Dependencies

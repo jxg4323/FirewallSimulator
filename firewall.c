@@ -33,9 +33,16 @@
 #include <unistd.h>     /* read library call comes from here */
 #include <string.h>
 #include <getopt.h>
+//#include <pcap.h>
 #include <arpa/inet.h>
 
 #include "filter.h"
+
+// unknown command
+#define UNKNOWN_COMMAND 5
+
+// number of bytes in ipv4 header
+#define HEADER_LENGTH 20
 
 // integer base
 #define BASE 10
@@ -175,25 +182,26 @@ static bool open_pipes( FWSpec_T * spec_ptr){
 
     return true;
 }
-
+/*
+ * Add up all the 16-bit words in the ip header
+ * and if there is a carry bit fold that bit
+ * over and add it to the sum. Then flip the
+ * bits of sum.
+ */
 unsigned short ipCheckSumCalc(unsigned char* pktbuf ){
 	unsigned int sum = 0;
-	unsigned char ihl = pktbuf[0] & 0x0F;	
-	unsigned short count = ((int)ihl) * 4; 
+	unsigned short count = HEADER_LENGTH; 
 
 	unsigned short* addr = (unsigned short*)pktbuf;
-
+	// add up all bits
 	while( count > 1 ){
 		sum += ntohs(*(unsigned short*)addr);
+		if( sum > 0x10000 ){ // if high order bit set, fold
+			sum = (sum & 0xffff)+(sum>>16);
+		}
 		count -= 2;
 		addr++;
 	}
-	
-	if( count > 0 )
-		sum += ntohs(*(unsigned char*)addr);
-
-	while( sum>>16 )
-		sum = (sum & 0xffff)+(sum>>16);
 
 	sum = ~sum;
 	return sum;
@@ -236,11 +244,6 @@ static void * filter_thread(void* args){
  
     FWSpec_T * spec_p = NULL;
 
-	fprintf(stdout,"fw: starting filter thread.\n");
-	fflush(stdout);
-
-	FILE* temp = fopen("testing","w");
-
 	pthread_setcancelstate(PTHREAD_CANCEL_ENABLE,&numItems);
 
 	spec_p = (FWSpec_T*)args;
@@ -255,8 +258,6 @@ static void * filter_thread(void* args){
 
 			if( (fw_spec.cflag == true) && (MODE != MODE_BLOCK_ALL) ){
 				invalidCS = ipCheckSumCalc( pktBuf );
-				if( invalidCS )
-					fprintf(temp,"bad check sum for a packet %x\n",invalidCS),fflush( temp );
 			}
 
 			// check modes 
@@ -315,12 +316,10 @@ static void display_menu(void)
 /// @return EXIT_SUCCESS or EXIT_FAILURE
 int main(int argc, char* argv[]){
 	int op;
-    int command = 5; // unknown command
+    int command = UNKNOWN_COMMAND; // unknown command
 	char* string = (char *)malloc(sizeof(char)*MAX_BUF_SIZE);
 	bool done = false; // user command thread loop condition
 	pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; 
-
-    
 
     init_sig_handlers();
 
@@ -345,8 +344,9 @@ int main(int argc, char* argv[]){
 	
 	// print error message if config file doesn't exist
     if( access( argv[optind],(R_OK|F_OK) ) == -1 ){
-       fprintf(stderr,"%s file doesn't exist\n", argv[0]);
-       return EXIT_FAILURE;
+    	fprintf(stderr,"FILE %s DOESN'T EXIST\n", argv[0]);
+		fprintf(stderr, "usage: firewall configFileName -c -i\n" );
+        return EXIT_FAILURE;
     }
 
 	fw_spec.config_file = argv[optind];
@@ -354,6 +354,9 @@ int main(int argc, char* argv[]){
 	if( !configure_filter(fw_spec.filter,fw_spec.config_file) ){
 		return EXIT_FAILURE;
 	}	
+	// message to tell user that filtering of packet data has started
+	fprintf(stdout,"fw: starting filter thread.\n");
+	fflush(stdout);
 
 	// key create destructor routine for tid_filter thread
 	pthread_key_create( &tsd_key,&tsd_destroy );
@@ -425,8 +428,9 @@ int main(int argc, char* argv[]){
 		
 	
     printf( "fw: main is joining the thread.\n"); fflush( stdout);
+	close_pipes( &fw_spec.pipes );
 	tsd_destroy( &fw_spec ); // free the firewall structure				
-
+	free(string);
     // wait for the filter thread to terminate
     void * retval = NULL;
     int joinResult = pthread_join(tid_filter, &retval);
