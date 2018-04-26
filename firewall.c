@@ -32,6 +32,8 @@
 #include <stdlib.h>
 #include <unistd.h>     /* read library call comes from here */
 #include <string.h>
+#include <getopt.h>
+#include <arpa/inet.h>
 
 #include "filter.h"
 
@@ -61,13 +63,14 @@ typedef struct Pipes_S
 } Pipes_T;
 
 /// FWSpec_S structure holds firewall configuration, filter and I/O.
-typedef struct FWSpec_S
-{
-   char * config_file;           ///< name of the firewall config file
-   char * in_file;               ///< name of input pipe 
-   char * out_file;              ///< name of output pipe 
-   IpPktFilter filter;           ///< pointer to the filter configuration
-   Pipes_T pipes;                ///< pipes is the stream data storage.
+typedef struct FWSpec_S{
+    char * config_file;           ///< name of the firewall config file
+    char * in_file;               ///< name of input pipe 
+    char * out_file;              ///< name of output pipe 
+    IpPktFilter filter;           ///< pointer to the filter configuration
+    Pipes_T pipes;                ///< pipes is the stream data storage.
+	bool cflag;	///< flag to calculate checksum
+	bool iflag; ///< flag to put blocked packets in pcap-formatted file
 } FWSpec_T;
 
 /// fw_spec is the specification data storage for the firewall.
@@ -173,6 +176,29 @@ static bool open_pipes( FWSpec_T * spec_ptr){
     return true;
 }
 
+unsigned short ipCheckSumCalc(unsigned char* pktbuf ){
+	unsigned int sum = 0;
+	unsigned char ihl = pktbuf[0] & 0x0F;	
+	unsigned short count = ((int)ihl) * 4; 
+
+	unsigned short* addr = (unsigned short*)pktbuf;
+
+	while( count > 1 ){
+		sum += ntohs(*(unsigned short*)addr);
+		count -= 2;
+		addr++;
+	}
+	
+	if( count > 0 )
+		sum += ntohs(*(unsigned char*)addr);
+
+	while( sum>>16 )
+		sum = (sum & 0xffff)+(sum>>16);
+
+	sum = ~sum;
+	return sum;
+}
+
 /// Read an entire IP packet from the input pipe
 /// @param in_pipe the binary input file stream
 /// @param buf Destination buffer for storing the packet
@@ -202,6 +228,7 @@ static void * filter_thread(void* args){
     bool success = false; // assume packet blocked
     int length = 0;
 	int numItems = 0;
+	int invalidCS = 0; // 0 if header checksum is good
 
     static int status = EXIT_FAILURE; // static for return persistence
 
@@ -212,8 +239,9 @@ static void * filter_thread(void* args){
 	fprintf(stdout,"fw: starting filter thread.\n");
 	fflush(stdout);
 
+	FILE* temp = fopen("testing","w");
+
 	pthread_setcancelstate(PTHREAD_CANCEL_ENABLE,&numItems);
-	//pthread_setspecific( tsd_key, spec_p );
 
 	spec_p = (FWSpec_T*)args;
 	// make sure pipes open successfully
@@ -224,8 +252,15 @@ static void * filter_thread(void* args){
 			numItems = fread(&length,sizeof(unsigned int),1,spec_p->pipes.in_pipe);
 			// read packet data
 			length = read_packet( spec_p->pipes.in_pipe,pktBuf,length );
+
+			if( (fw_spec.cflag == true) && (MODE != MODE_BLOCK_ALL) ){
+				invalidCS = ipCheckSumCalc( pktBuf );
+				if( invalidCS )
+					fprintf(temp,"bad check sum for a packet %x\n",invalidCS),fflush( temp );
+			}
+
 			// check modes 
-			if( MODE == MODE_FILTER ){ // check if packet is to be blocked based on config file
+			if( MODE == MODE_FILTER && (!invalidCS) ){ // check if packet is to be blocked based on config file
 				success = filter_packet( spec_p->filter,pktBuf );
 				if( success ){// write the packet to the FromFirewall pipe
 					
@@ -235,7 +270,7 @@ static void * filter_thread(void* args){
 					status = EXIT_SUCCESS;		
 
 				}
-			}else if( MODE == MODE_ALLOW_ALL ){
+			}else if( MODE == MODE_ALLOW_ALL && (!invalidCS) ){
 				// write packet data to the FromFirewall pipe
 				numItems = fwrite( &length,sizeof(unsigned int),1,spec_p->pipes.out_pipe );
 				numItems = fwrite( pktBuf,1,length,spec_p->pipes.out_pipe );
@@ -285,31 +320,37 @@ int main(int argc, char* argv[]){
 	bool done = false; // user command thread loop condition
 	pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; 
 
-    // print usage message if no arguments
-    if(argc < 2){
-       fprintf(stderr, "usage: %s configFileName\n", argv[0]);
-       return EXIT_FAILURE;
-    }
+    
 
     init_sig_handlers();
-
-	while( (op = getopt( argc,argv, "ci")) != -1){
-		switch(op){
-			case 'c': // ip header checksum
-				break;
-			case 'l': // write block packets to a pcap-formatted file
-				break;
-		}
-	}
 
 	fw_spec.filter = create_filter();
 	fw_spec.in_file = "ToFirewall";	
 	fw_spec.out_file = "FromFirewall";
 
-	fw_spec.config_file = argv[1];
+	while( (op = getopt( argc,argv, "cl")) != -1){
+		switch(op){
+			case 'c': // ip header checksum
+				fw_spec.cflag = true;
+				break;
+			case 'l': // write block packets to a pcap-formatted file
+				fw_spec.iflag = true;
+				break;
+			default:
+       			fprintf(stderr, "usage: firewall configFileName -c -i\n [%c] unknown\n",(char)op );
+      			break;
+		}
+	}
+	
+	// print error message if config file doesn't exist
+    if( access( argv[optind],(R_OK|F_OK) ) == -1 ){
+       fprintf(stderr,"%s file doesn't exist\n", argv[0]);
+       return EXIT_FAILURE;
+    }
+
+	fw_spec.config_file = argv[optind];
 	// configure filter
 	if( !configure_filter(fw_spec.filter,fw_spec.config_file) ){
-		fprintf(stderr,"configure_filter failed\n");
 		return EXIT_FAILURE;
 	}	
 
