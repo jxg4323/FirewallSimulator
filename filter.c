@@ -39,16 +39,6 @@
 #define BPING "BLOCK_PING_REQ"
 #define BIP "BLOCK_IP_ADDR"
 
-//TODO: implement later
-struct content{
-		unsigned char first,second,third,fourth;
-};
-
-union ip_addr{
-	struct content chars;	
-	unsigned int addr;
-};
-
 /// The type used to hold the configuration settings for a filter
 typedef struct FilterConfig_S
 {
@@ -86,19 +76,13 @@ static void parse_remainder_of_string_for_ip(unsigned int* ipAddr)
  * in ip-tuple order and puts it into a single integer.
  */
 unsigned int convertarray( unsigned int* array ){
-	union ip_addr ip;
 	unsigned int result = 0;
 	unsigned char* p = (unsigned char*)&result;
-	ip.chars.first = (char)array[3];
-	ip.chars.second = (char)array[2];
-	ip.chars.third = (char)array[1];
-	ip.chars.fourth = (char)array[0];
 	int j = 0;
 	for(int i = 3; i>=0;i--){
 		p[j] = (unsigned char)array[i];
 		j++;
 	}
-	//printf("result: %x\nunion result: %x\n",result,ip.addr);
 	return result;
 }
 

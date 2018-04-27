@@ -33,10 +33,10 @@
 #include <unistd.h>     /* read library call comes from here */
 #include <string.h>
 #include <getopt.h>
-//#include <pcap.h>
 #include <arpa/inet.h>
 
 #include "filter.h"
+#include "mypcap.h"
 
 // unknown command
 #define UNKNOWN_COMMAND 5
@@ -52,6 +52,8 @@
 
 /// maximum packet length (ipv4)
 #define MAX_PKT_LENGTH 2048
+
+
 
 /// Type used to control the mode of the firewall
 typedef enum FilterMode_E
@@ -73,7 +75,8 @@ typedef struct Pipes_S
 typedef struct FWSpec_S{
     char * config_file;           ///< name of the firewall config file
     char * in_file;               ///< name of input pipe 
-    char * out_file;              ///< name of output pipe 
+    char * out_file;              ///< name of output pipe
+	char * pcap_file;			  ///< name of pcap file 
     IpPktFilter filter;           ///< pointer to the filter configuration
     Pipes_T pipes;                ///< pipes is the stream data storage.
 	bool cflag;	///< flag to calculate checksum
@@ -236,17 +239,22 @@ static void * filter_thread(void* args){
     bool success = false; // assume packet blocked
     int length = 0;
 	int numItems = 0;
+	int blockedItems = 0; // number of blocked packets
 	int invalidCS = 0; // 0 if header checksum is good
+	FILE* pcap = NULL; // pcap foramtted file pointer
 
     static int status = EXIT_FAILURE; // static for return persistence
 
     status = EXIT_FAILURE; // reset
  
     FWSpec_T * spec_p = NULL;
+	packet_header* pktheader = NULL;
 
 	pthread_setcancelstate(PTHREAD_CANCEL_ENABLE,&numItems);
 
 	spec_p = (FWSpec_T*)args;
+	if( fw_spec.iflag == true) // initialze the pcap file
+			pcap = initialize( spec_p->pcap_file );
 	// make sure pipes open successfully
 	if( open_pipes(spec_p) ){
 		// continously read ToFirewall pipe until blocked
@@ -259,7 +267,6 @@ static void * filter_thread(void* args){
 			if( (fw_spec.cflag == true) && (MODE != MODE_BLOCK_ALL) ){
 				invalidCS = ipCheckSumCalc( pktBuf );
 			}
-
 			// check modes 
 			if( MODE == MODE_FILTER && (!invalidCS) ){ // check if packet is to be blocked based on config file
 				success = filter_packet( spec_p->filter,pktBuf );
@@ -270,6 +277,15 @@ static void * filter_thread(void* args){
 					fflush( spec_p->pipes.out_pipe );
 					status = EXIT_SUCCESS;		
 
+				}else{ // the packet is blocked write it the blocked file if given
+					if( fw_spec.iflag == true ){ // write the blocked packets to the pcap file
+						pktheader = (packet_header*)malloc(sizeof(struct pcaprec_hdr_s));
+						setpktheader( pktheader,length,blockedItems );
+						writePacket( pktheader,(char*)pktBuf,length,pcap);
+					
+						blockedItems++;
+						free( pktheader ); 	
+					}
 				}
 			}else if( MODE == MODE_ALLOW_ALL && (!invalidCS) ){
 				// write packet data to the FromFirewall pipe
@@ -278,14 +294,23 @@ static void * filter_thread(void* args){
 				fflush( spec_p->pipes.out_pipe );
 				status = EXIT_SUCCESS;		
 
-			}else if( MODE == MODE_BLOCK_ALL ){ // don't write anything to FromFirewall pipe
+			}else if( MODE == MODE_BLOCK_ALL || (invalidCS && fw_spec.cflag == true) ){ // don't write anything to FromFirewall pipe
 				status = EXIT_SUCCESS;
+				if( fw_spec.iflag == true ){ // write the blocked packets to the pcap file
 
+					pktheader = (packet_header*)malloc(sizeof(struct pcaprec_hdr_s));
+					setpktheader( pktheader,length,blockedItems );
+					writePacket( pktheader,(char*)pktBuf,length,pcap);
+					
+					blockedItems++;
+					free( pktheader ); 	
+				}
 			}
 		}
 
 	}
 
+	cleanup( pktheader,pcap );	
     // end of thread is never reached when there is a cancellation.
     printf( "fw: thread is deleting filter data.\n"); fflush( stdout);
     tsd_destroy( (void *)spec_p );
@@ -318,6 +343,7 @@ int main(int argc, char* argv[]){
 	int op;
     int command = UNKNOWN_COMMAND; // unknown command
 	char* string = (char *)malloc(sizeof(char)*MAX_BUF_SIZE);
+	char* outputFileName = "BlockedPackets.pcap";
 	bool done = false; // user command thread loop condition
 	pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; 
 
@@ -328,16 +354,24 @@ int main(int argc, char* argv[]){
 	fw_spec.out_file = "FromFirewall";
 	fw_spec.cflag = false;
 
-	while( (op = getopt( argc,argv, "cl")) != -1){
+	while( (op = getopt( argc,argv, "chl::")) != -1){
 		switch(op){
 			case 'c': // ip header checksum
 				fw_spec.cflag = true;
 				break;
 			case 'l': // write block packets to a pcap-formatted file
 				fw_spec.iflag = true;
+				if( optarg == NULL )
+					outputFileName = "BlockedPackets.pcap";
+				else
+					outputFileName = optarg;
+				fw_spec.pcap_file = outputFileName;
 				break;
+			case 'h':
+       			fprintf(stderr, "usage: firewall configFileName -c -l [outputFileName] -h\n" );
+				return EXIT_FAILURE;
 			default:
-       			fprintf(stderr, "usage: firewall configFileName -c -i\n [%c] unknown\n",(char)op );
+       			fprintf(stderr, "usage: firewall configFileName -c -l [outputFileName] -h\n [%c] unknown\n",(char)op );
       			break;
 		}
 	}
@@ -345,7 +379,7 @@ int main(int argc, char* argv[]){
 	// print error message if config file doesn't exist
     if( access( argv[optind],(R_OK|F_OK) ) == -1 ){
     	fprintf(stderr,"FILE %s DOESN'T EXIST\n", argv[0]);
-		fprintf(stderr, "usage: firewall configFileName -c -i\n" );
+		fprintf(stderr, "usage: firewall configFileName -c -l [outputFileName]\n" );
         return EXIT_FAILURE;
     }
 

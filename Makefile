@@ -1,5 +1,5 @@
 #
-# Created by gmakemake (Ubuntu Jul 25 2014) on Thu Apr 26 12:59:18 2018
+# Created by gmakemake (Ubuntu Jul 25 2014) on Fri Apr 27 00:25:40 2018
 #
 
 #
@@ -61,13 +61,13 @@ fifos: all
 
 
 CPP_FILES =	
-C_FILES =	filter.c firewall.c
+C_FILES =	filter.c firewall.c mypcap.c
 PS_FILES =	
 S_FILES =	
-H_FILES =	filter.h pktUtility.h
+H_FILES =	filter.h mypcap.h pktUtility.h
 SOURCEFILES =	$(H_FILES) $(CPP_FILES) $(C_FILES) $(S_FILES)
 .PRECIOUS:	$(SOURCEFILES)
-OBJFILES =	filter.o 
+OBJFILES =	filter.o mypcap.o 
 
 #
 # Main targets
@@ -76,14 +76,15 @@ OBJFILES =	filter.o
 all:	firewall 
 
 firewall:	firewall.o $(OBJFILES)
-	$(CC) $(CFLAGS) -o firewall firewall.o $(OBJFILES) $(CLIBFLAGS) 
+	$(CC) $(CFLAGS) -o firewall firewall.o $(OBJFILES) $(CLIBFLAGS)
 
 #
 # Dependencies
 #
 
 filter.o:	filter.h pktUtility.h
-firewall.o:	filter.h
+firewall.o:	filter.h mypcap.h
+mypcap.o:	mypcap.h
 
 #
 # Housekeeping
